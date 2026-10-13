@@ -181,6 +181,17 @@ searchentry.search {
   margin-left: 40px;
 }
 
+/* The theme's link and selection colours vanish on the account colour. */
+.bubble.outgoing .body > link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.bubble.outgoing .body > selection {
+  color: inherit;
+  background: alpha(currentColor, 0.3);
+}
+
 .sender {
   font-weight: bold;
   color: #3a76f0;

@@ -18,6 +18,8 @@ touching the mouse.
   viewer); send them by pasting, dropping or picking files.
 - Voice messages play in the chat, at 1×, 1.5× or 2×; consecutive ones
   play one after another. A dot marks those you haven't heard.
+- Links in messages open in your browser, and message text can be
+  selected and copied.
 - Read receipts, delivery ticks (✓ sent, ✓✓ delivered, bold ✓✓ read), edits,
   remote deletes, and sync with messages you send from your phone.
 - Several accounts side by side, their chats in one list. Each account has

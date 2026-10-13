@@ -6,6 +6,7 @@ mod audio;
 mod avatar;
 mod format;
 mod images;
+mod links;
 mod placement;
 pub mod settings;
 
@@ -505,7 +506,12 @@ impl Ui {
             self,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, key, _, mods| ui.on_key(key, mods)
+            move |keys, key, _, mods| {
+                if ui.forward_typing(keys, key, mods) {
+                    return glib::Propagation::Stop;
+                }
+                ui.on_key(key, mods)
+            }
         ));
         self.window.add_controller(keys);
 
@@ -1403,6 +1409,35 @@ impl Ui {
 
     // ---- keyboard ----------------------------------------------------------
 
+    /// Clicking a message focuses its text for selecting; typing then goes
+    /// to the compose box rather than nowhere.
+    fn forward_typing(
+        &self,
+        keys: &gtk::EventControllerKey,
+        key: gdk::Key,
+        mods: gdk::ModifierType,
+    ) -> bool {
+        let mods = mods & gtk::accelerator_get_default_mod_mask();
+        let printable = key.to_unicode().is_some_and(|c| !c.is_control());
+        if self.page() != Some(Page::Chat)
+            || !(mods - gdk::ModifierType::SHIFT_MASK).is_empty()
+            || !printable
+        {
+            return false;
+        }
+        let in_messages = match RootExt::focus(&self.window) {
+            None => true,
+            Some(focus) => {
+                focus.is::<gtk::Label>() || focus == *self.messages.upcast_ref::<gtk::Widget>()
+            }
+        };
+        if !in_messages {
+            return false;
+        }
+        self.compose.grab_focus();
+        keys.forward(&self.compose)
+    }
+
     fn on_key(&self, key: gdk::Key, mods: gdk::ModifierType) -> glib::Propagation {
         let mods = mods & gtk::accelerator_get_default_mod_mask();
         let ctrl = mods == gdk::ModifierType::CONTROL_MASK;
@@ -1717,7 +1752,13 @@ fn message_row(
             bubble.append(controls);
         }
         if !message.body.is_empty() || (message.images.is_empty() && audio.is_empty()) {
-            let body = label(&message.body, &["body"]);
+            let body = label("", &["body"]);
+            body.set_markup(&links::markup(&message.body));
+            body.set_selectable(true);
+            body.connect_activate_link(|body, uri| {
+                open_link(body, uri);
+                glib::Propagation::Stop
+            });
             body.set_wrap(true);
             body.set_wrap_mode(pango::WrapMode::WordChar);
             body.set_max_width_chars(34);
@@ -1772,6 +1813,19 @@ fn message_row(
         .activatable(false)
         .focusable(false)
         .build()
+}
+
+/// Opens `uri` from a message. GTK's own handler would pass the layer
+/// surface as parent.
+fn open_link(label: &gtk::Label, uri: &str) {
+    let window = label.root().and_downcast::<gtk::Window>();
+    let parent = window.as_ref().and_then(images::dialog_parent);
+    // The link isn't logged: it's message content.
+    gtk::UriLauncher::new(uri).launch(parent, gio::Cancellable::NONE, |result| {
+        if let Err(err) = result {
+            tracing::warn!(%err, "opening a link failed");
+        }
+    });
 }
 
 fn help_page() -> gtk::ScrolledWindow {

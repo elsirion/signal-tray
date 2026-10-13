@@ -165,14 +165,14 @@ fn populate_personal(store: &mut Store, images: &Path) -> anyhow::Result<()> {
             &alice,
             Some("alice"),
             12 * MINUTE,
-            "Did you see the new release?",
+            "Did you see the new release? Notes are at https://example.com/releases/0.2 (and www.example.org/changelog).",
             ReadState::Read,
         ),
         (
             &alice,
             None,
             10 * MINUTE,
-            "Not yet, anything interesting?",
+            "Not yet, anything interesting? https://example.com/faq",
             ReadState::Read,
         ),
         (

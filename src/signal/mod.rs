@@ -13,6 +13,7 @@
 
 mod convert;
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -37,7 +38,8 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use crate::model::{ConversationId, OutgoingImage, PeerId, SignalEvent, Timestamp};
 pub use convert::Origin;
 use convert::{
-    Names, Source, content_events, group_conversation, group_master_key, peer_id, service_id,
+    MasterKey, Names, Source, content_events, content_group, group_conversation, group_master_key,
+    peer_id, service_id,
 };
 
 /// Messages read from presage's store are handed over in batches of this size.
@@ -331,7 +333,8 @@ async fn run(opts: SpawnOptions, events: Events, mut commands: Commands) -> anyh
     let mention_names = mention_names(&names);
     hand_over_stored_messages(manager.store(), &opts.store_path, &mention_names, &events).await?;
 
-    receive_loop(manager, mention_names, events, commands).await
+    let group_titles = group_titles_of(&names);
+    receive_loop(manager, mention_names, group_titles, events, commands).await
 }
 
 fn mention_names(names: &[(ConversationId, String)]) -> Names {
@@ -341,6 +344,17 @@ fn mention_names(names: &[(ConversationId, String)]) -> Names {
             ConversationId::Direct(peer) => Some((peer.clone(), name.clone())),
             ConversationId::Group(_) => None,
         })
+        .collect()
+}
+
+/// Group titles as last sent to the app.
+type GroupTitles = HashMap<ConversationId, String>;
+
+fn group_titles_of(names: &[(ConversationId, String)]) -> GroupTitles {
+    names
+        .iter()
+        .filter(|(id, _)| matches!(id, ConversationId::Group(_)))
+        .cloned()
         .collect()
 }
 
@@ -590,6 +604,7 @@ async fn commit_batch(batch: Vec<SignalEvent>, events: &Events) -> anyhow::Resul
 async fn receive_loop(
     manager: Manager<SqliteStore, Registered>,
     mut names: Names,
+    mut group_titles: GroupTitles,
     events: Events,
     mut commands: Commands,
 ) -> anyhow::Result<()> {
@@ -608,7 +623,8 @@ async fn receive_loop(
                     tokio::select! {
                         received = stream.next() => match received {
                             Some(received) => {
-                                on_received(received, &manager, &mut names, &events).await?;
+                                on_received(received, &manager, &mut names, &mut group_titles, &events)
+                                    .await?;
                             }
                             None => break,
                         },
@@ -652,10 +668,14 @@ async fn on_received(
     received: Received,
     manager: &Manager<SqliteStore, Registered>,
     names: &mut Names,
+    group_titles: &mut GroupTitles,
     events: &Events,
 ) -> anyhow::Result<()> {
     match received {
         Received::Content(content) => {
+            if let Some(group) = content_group(&content) {
+                update_group_title(manager, group, group_titles, events).await?;
+            }
             let converted = content_events(&content, Source::Live, names);
             if !converted.is_empty() {
                 emit(
@@ -672,6 +692,7 @@ async fn on_received(
         Received::Contacts => {
             let all = load_names(manager).await?;
             *names = mention_names(&all);
+            *group_titles = group_titles_of(&all);
             emit(events, Event::Names(all)).await?;
         }
         Received::QueueEmpty => tracing::debug!("caught up with queued messages"),
@@ -684,6 +705,35 @@ async fn on_received(
         Received::Disconnected(reason) => tracing::info!(?reason, "disconnected"),
     }
     Ok(())
+}
+
+/// Sends a group's title if it is new or changed. presage fetches a group
+/// it has not seen, or whose revision moved on (e.g. a rename), before it
+/// hands over the message, so the store is up to date here.
+async fn update_group_title(
+    manager: &Manager<SqliteStore, Registered>,
+    group: MasterKey,
+    group_titles: &mut GroupTitles,
+    events: &Events,
+) -> anyhow::Result<()> {
+    let title = match manager.store().group(group).await {
+        Ok(stored) => stored
+            .and_then(|g| g.title)
+            .filter(|t| !t.trim().is_empty()),
+        Err(err) => {
+            tracing::warn!(%err, "reading group failed");
+            return Ok(());
+        }
+    };
+    let Some(title) = title else {
+        return Ok(());
+    };
+    let conversation = group_conversation(&group);
+    if group_titles.get(&conversation) == Some(&title) {
+        return Ok(());
+    }
+    group_titles.insert(conversation.clone(), title.clone());
+    emit(events, Event::Names(vec![(conversation, title)])).await
 }
 
 fn handle_command(

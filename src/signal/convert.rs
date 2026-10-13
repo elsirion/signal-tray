@@ -45,6 +45,28 @@ pub fn group_master_key(encoded: &str) -> Option<MasterKey> {
     BASE64.decode(encoded).ok()?.try_into().ok()
 }
 
+/// The group a just-received message belongs to, if any.
+pub fn content_group(content: &Content) -> Option<MasterKey> {
+    let data = match &content.body {
+        ContentBody::DataMessage(data) => data,
+        ContentBody::EditMessage(edit) => edit.data_message.as_ref()?,
+        ContentBody::SynchronizeMessage(SyncMessage {
+            content: Some(sync_message::Content::Sent(sent)),
+            ..
+        }) => match &sent.edit_message {
+            Some(edit) => edit.data_message.as_ref()?,
+            None => sent.message.as_ref()?,
+        },
+        _ => return None,
+    };
+    data.group_v2
+        .as_ref()?
+        .master_key
+        .as_deref()?
+        .try_into()
+        .ok()
+}
+
 /// Whether a message was just received or read back from storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
@@ -502,6 +524,47 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn group_of_incoming_synced_and_edited_messages() {
+        let key = [7u8; 32];
+        let in_group = DataMessage {
+            group_v2: Some(GroupContextV2 {
+                master_key: Some(key.to_vec()),
+                ..Default::default()
+            }),
+            ..text("hi", 1)
+        };
+        let sent = |sent: Sent| {
+            content(
+                ME,
+                ContentBody::SynchronizeMessage(SyncMessage {
+                    content: Some(sync_message::Content::Sent(sent)),
+                    ..Default::default()
+                }),
+            )
+        };
+        let edit = EditMessage {
+            target_sent_timestamp: Some(1),
+            data_message: Some(in_group.clone()),
+        };
+        for c in [
+            content(ALICE, ContentBody::DataMessage(in_group.clone())),
+            content(ALICE, ContentBody::EditMessage(edit.clone())),
+            sent(Sent {
+                message: Some(in_group.clone()),
+                ..Default::default()
+            }),
+            sent(Sent {
+                edit_message: Some(edit),
+                ..Default::default()
+            }),
+        ] {
+            assert_eq!(content_group(&c), Some(key), "{:?}", c.body);
+        }
+        let direct = content(ALICE, ContentBody::DataMessage(text("hi", 1)));
+        assert_eq!(content_group(&direct), None);
     }
 
     #[test]

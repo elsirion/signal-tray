@@ -20,8 +20,8 @@ thiserror = "2.0.21"
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-presage = { git = "https://github.com/fifteenlabs/presage", rev = "39a2929" }
-presage-store-sqlite = { git = "https://github.com/fifteenlabs/presage", rev = "39a2929" }
+presage = { git = "https://github.com/elsirion/presage", rev = "a42dff9" }
+presage-store-sqlite = { git = "https://github.com/elsirion/presage", rev = "a42dff9" }
 tokio = { version = "1.48", features = ["rt", "macros", "sync", "time"] }
 futures = "0.3"
 base64 = { version = "0.22", default-features = false }
